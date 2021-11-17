@@ -1,6 +1,8 @@
 {
     "server_ip": "10.0.2.15",
-    "server_port": 8090,
+    "server_port": 443,
     "php_fpm_ip": "10.0.2.15",
-	"php_fpm_port": 9000
+	"php_fpm_port": 9000,
+	"php_connect_num":10,
+	"worker_num":36
 }
