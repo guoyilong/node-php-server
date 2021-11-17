@@ -25,8 +25,16 @@ function loadjson(filepath)
 var data = loadjson('../config/config.json');
 */
 
+START:
+console.log("ssssssssssssss");
+
 util = require('../lib/util');
 
 data = util.loadjson('../config/config.json');
 
 console.log(data);
+
+msg = '{"user_id":121,"cmd":101,"msg":"sssssssssssssss"}';
+
+console.log(" type = %s", typeof(msg));
+

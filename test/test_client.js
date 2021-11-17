@@ -10,7 +10,7 @@ output:process.stdout
 })
 let client = new net.Socket();
 // 3 链接
-client.connect(8090,'10.0.2.15');
+client.connect(8090,'10.0.117.111');
 
 client.setEncoding('utf8');
 client.on('data',(chunk)=>{
