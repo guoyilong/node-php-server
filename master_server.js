@@ -3,8 +3,6 @@ var util = require("util");
 const fork = require('child_process').fork;
 const cpus = require('os').cpus();
 
-var cluster = require('cluster');
-
 // 1 引入模块
 const net = require('net');
 
@@ -26,6 +24,8 @@ log4js.MyDebug(" load config success server ip = %s port = %s worker_num = %s ",
 // 2 创建服务器
 let clientArr = [];
 const server = net.createServer();
+
+const broad_cast_server = net.createServer();
 
 const work_process_manager = {};
 
@@ -387,7 +387,31 @@ function doLogic(msg, client_id)
     }
 }
 
-//workers[0].send('sssss');
+var broad_cast_handler = function do_broad_cast(client, msg, callback) {
+    log4js.MyDebug(" do_broad_cast ===> ");
+
+    if (clientArr.length == 0) {
+        return;
+    }
+
+    for (let i in clientArr) {
+        the_client = clientArr[i];
+        // 自己当前的的连接不发 为空的连接不发
+        if (the_client == null) {
+            continue;
+        }
+        //console.log(" client id = " + the_client.id);
+
+        // 对所有的客户端连接进行广播　可以加上广播条件　有选择性的广播
+
+        the_client.write(" from client from php "  + " msg = " + msg);
+    }
+
+    if (callback && typeof(callback) === "function") {
+        callback();
+    } 
+}
+
 // 3 绑定链接事件
 server.on('connection', (client)=> {
     log4js.MyDebug("remote address = " + client.remoteAddress + " port = " + client.remotePort + " length = " + clientArr.length);
@@ -458,22 +482,7 @@ server.on('connection', (client)=> {
         else {
 
             if (cmd == 102) {
-
-                myUtil.computation();
-
-                for (let i in clientArr) {
-                    the_client = clientArr[i];
-                    // 自己当前的的连接不发 为空的连接不发
-                    if (the_client == null || the_client.id == client.id) {
-                        continue;
-                    }
-                    console.log(" client id = " + the_client.id);
-                    the_client.write(" from client " + client.id + " msg = " + msg);
-                }
             }
-
-            client.write("send broadcast ====>");
-
         }
 
     });
@@ -489,8 +498,79 @@ server.on('connection', (client)=> {
     })
 })
 
+broad_cast_server.on('connection', (client)=> {
+    log4js.MyDebug("remote address = " + client.remoteAddress + " port = " + client.remotePort + " length = " + clientArr.length);
+    
+    client.setEncoding('utf8');
+
+    // 客户socket进程绑定事件
+    client.on('data',(msg)=>{
+
+        log4js.MyDebug(" recv msg client id = " + client.id + " msg = " + msg + " length = " + msg.length);
+        log4js.MyDebug(" ===> " + typeof(msg));
+
+        var buf = Buffer.from(msg , 'base64');
+
+        let offset = 0;
+        var user_id = buf.readUIntBE(offset, 4);
+        offset += 4;
+
+        let msg_len = buf.readUIntBE(offset, 4);
+        offset += 4;
+        
+        // 进行检验
+        if (user_id != 66) {
+            client.end();
+            client.destroy();
+            return;
+        }
+
+        var msg_json_str = buf.slice(offset, offset + msg_len);
+        log4js.MyDebug("user_id =  " + user_id + " msg_len = " + msg_len + " offset " + offset +  " json_str = " + msg_json_str);
+
+        let msg_tb = myUtil.strToJson(msg_json_str.toString());
+        if (typeof(msg_tb) != 'object') {
+            let tmp_ret_msg_tb = {};
+            tmp_ret_msg_tb.error = "str can not to json";
+            //tmp_ret_msg_tb.msg_json_str = msg_json_str;
+            client.write(JSON.stringify(tmp_ret_msg_tb));
+            client.end();
+            client.destroy();
+            return;
+        }
+
+        log4js.MyDebug(" recv msg   user_id = " + msg_tb.user_id + " cmd = " + msg_tb.cmd + " msg = " + msg_tb.msg);
+
+        var cmd = msg_tb.cmd;
+        var msg = msg_tb.msg;
+
+        //console.log('free ' + os.freemem() / kb + 'kb\r\n');
+
+        // 返回给php的消息
+        client.write("send broadcast ====>");
+
+        broad_cast_handler(client, msg, () => {
+            console.log(" ====>　send broad cast finish");
+        });
+
+    });
+
+    client.on('close', (p1)=>{
+        log4js.MyError(" client close connect from php   ");
+    });
+
+    client.on('error', (p1)=>{
+        log4js.MyError(" client from php error  "  + " error msg = " + p1);
+    })
+})
+
+
 server.listen(config_data.server_port, config_data.server_ip, () => {
     log4js.MyDebug('打开服务器 %s', server.address());
+});
+
+broad_cast_server.listen(config_data.server_port + 1, config_data.server_ip, () => {
+    log4js.MyDebug('打开服务器 %s', broad_cast_server.address());
 });
 
 
