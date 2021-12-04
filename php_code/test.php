@@ -61,6 +61,59 @@ function ToUrlEncode($arr) {
     return $temp;
 }
 
+function broadCastMsg($user_id, $msg)
+{
+    $tb = array();
+    $tb['user_id'] = $user_id;
+    $tb['cmd'] = 101;
+    $tb['msg'] = $msg;
+
+    $tb_str = json_encode($tb);
+    $the_len = strlen($tb_str);
+
+    $date_str = date("Y-m-d", time());
+
+    error_log(" the_len = {$the_len} \r\n", 3, "/var/tmp/php_send_{$date_str}.log");
+
+    echo  $the_len . "\r\n";
+
+    $msg_buf = pack("N2a{$the_len}", 66, strlen($tb_str), $tb_str);
+
+    var_dump($msg_buf);
+
+    $msg_tb =  unpack("Nu_id/Lstr_len/a*msg_json", $msg_buf);
+
+    var_dump($msg_tb);
+
+    $host = "10.0.2.15";
+
+    $host_port = 444;
+
+    $fp = fsockopen($host, $host_port, $errno, $errstr, 30);
+
+    if (!$fp) {
+        error_log("FAILED TO CONNECT TO PUSH, host: errno {$errno} errstr {$errstr} \r\n", 3, "/var/tmp/php_send_{$date_str}.log");
+        return -1;
+    }
+
+    $msg_buf_base_64 = base64_encode($msg_buf);
+
+    error_log($msg_buf_base_64 . "\r\n", 3 , "/var/tmp/php_send_{$date_str}.log");
+
+    $isendLen = fwrite($fp, $msg_buf_base_64);
+
+    error_log(" sendLen = {$isendLen} \r\n", 3, "/var/tmp/php_send_{$date_str}.log");
+
+    if ($isendLen > 0) {
+        $data = fread($fp, 4096);
+        error_log(" receive data = {$data} \r\n", 3, "/var/tmp/php_send_{$date_str}.log");
+    }
+
+    fclose($fp);
+
+    ob_clean();
+}
+
 if (!empty($_GET)) {
 
     $tmp_tb = array();
@@ -94,6 +147,10 @@ if (!empty($_GET)) {
     if ($the_msg == "gyl") {
         $sleep_ms = 1000 * 10;
     }
+    else if ($the_msg == "broadcast") {
+        broadCastMsg(121, $the_msg);
+		$sleep_ms = 0;
+    }
 
     $pid = posix_getpid();
 
@@ -103,12 +160,14 @@ if (!empty($_GET)) {
 
     error_log(" {$the_msg} {$time_str} rand_num = {$rand_num} sleep_ms = {$sleep_ms} pid = {$pid} \r\n", 3, "/var/tmp/php_record_{$date_str}.log");
 
-    //usleep(1000 * $sleep_ms);
+    usleep(1000 * $sleep_ms);
+
+    $_GET['sleep_ms'] = $sleep_ms;
 
     $hostname = "127.0.0.1";
-    $username = "ss";
-    $password = "222222";
-    $dbName = "ssd";
+    $username = "aa";
+    $password = "aa2017";
+    $dbName = "haha";
     $dbPort = 3306;
 
     $conn = mysqli_connect($hostname, $username, $password, $dbName);
@@ -122,12 +181,12 @@ if (!empty($_GET)) {
         if ($conn) {
             if (mysqli_select_db($conn, $dbName)) {
 
-                $result = mysqli_query($conn, "SELECT count(*) as num FROM user_field");
+                $result = mysqli_query($conn, "SELECT count(*) as field_1 FROM field_1 where  id = 8");
 
                 while($row = mysqli_fetch_row($result))
                 {
-                    $user_name = $row[0];
-                    $_GET['user_name'] = $user_name;
+                    $field_num = $row[0];
+                    $_GET['field_num'] = $field_num;
                 }
             }
             else {
