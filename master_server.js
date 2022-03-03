@@ -7,6 +7,7 @@ const cpus = require('os').cpus();
 const net = require('net');
 
 const log4js = require('./lib/log_utils.js'); // 引入库
+const lib_util = require('./lib/util');
 
 os = require('os');
 var kb = 1024;
@@ -255,6 +256,8 @@ const createWorker = () => {
 
 for (let i=0; i< config_data.worker_num; i++) {	
     createWorker();	
+
+    console.log('free 111 ' + os.freemem() / kb + 'kb\r\n');
 }
 
 
@@ -265,6 +268,7 @@ function waitMsgFromWorker(the_worker, worker_index, msg, client_id, cur_msg_ind
 {
     log4js.MyDebug(" waitMsgToWorker now to user worker pid = " + the_worker.pid + " client id = " + client_id);
 
+    // 再次注册message 事件　等待自己的消息的返回
     the_worker.once('message', result_json => {
         log4js.MyDebug(" send msg = " + msg  + " result = " + result_json + " pid = " + the_worker.pid + " client id = " + client_id);
 
@@ -282,6 +286,9 @@ function waitMsgFromWorker(the_worker, worker_index, msg, client_id, cur_msg_ind
         if (client != null) {
             client.write("result is " + result_json + " pid " + the_worker.pid);
         }
+        else {
+            log4js.MyError(" this client has close connect client_id = %s ", client_id);
+        }
 
         // 检查该进程　
         if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
@@ -298,7 +305,7 @@ function waitMsgFromWorker(the_worker, worker_index, msg, client_id, cur_msg_ind
         }
     });	
 
-    log4js.MyError("waitMsgToWorker sssssssssssssssssssssssssss===> test");
+    //log4js.MyError("waitMsgToWorker sssssssssssssssssssssssssss===> test");
 }
 
 function sendMsgToWorker(the_worker, worker_index, msg, client_id)
@@ -313,13 +320,15 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id)
     the_worker.send(JSON.stringify(msg_tb)); 
     the_worker.cur_process_num += 1;
     
+    // 事件注册之后　该函数的内存并没有清理消失掉　而是　等着事件触发　相当于回调　所以取得到msg_tb 
     the_worker.once('message', result_json => {
         log4js.MyDebug(" send msg = " + msg  + " result = " + result_json + " pid = " + the_worker.pid + " client id = " + client_id + " msg_index = " + msg_tb.msg_index);
 
         var ret_json_tb = JSON.parse(result_json);
         if (ret_json_tb['msg_index'] != msg_tb.msg_index) {
-            log4js.MyError(" not my msg my msg = %s ret msg = %s  ret_msg_inde = %s cur_msg_index = %s", msg, ret_json_tb['msg'], ret_json_tb['msg_index'], msg_tb.msg_index);
+            log4js.MyError(" not my msg my msg = %s ret msg = %s  ret_msg_index = %s cur_msg_index = %s", msg, ret_json_tb['msg'], ret_json_tb['msg_index'], msg_tb.msg_index);
             
+            // 事件触发之后　如果不是当前函数发送的消息　需要再次注册message 事件　等待自已发送的消息的返回　
             waitMsgFromWorker(the_worker, worker_index, msg, client_id, msg_tb.msg_index);
             return;
         }
@@ -329,6 +338,9 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id)
         client = clientArr[client_id];
         if (client != null) {
             client.write("result is " + result_json + " pid " + the_worker.pid);
+        }
+        else {
+            log4js.MyError(" this client has close connect client_id = %s ", client_id);
         }
 
         // 检查该进程　
@@ -346,7 +358,7 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id)
         }
     });	
 
-    log4js.MyError("sssssssssssssssssssssssssss===> test");
+    //log4js.MyError("sssssssssssssssssssssssssss===> test");
     
 }
 
@@ -365,7 +377,7 @@ function doLogic(msg, client_id)
 
         var the_worker = work_process_manager.workers_map[worker_pid];
 
-        // 如果该子进程　已经有消息在处理 则需要把当前消息加到消息队列之中
+        // 如果该子进程　已经有多条消息在处理　且处理的消息的数量　超出了子进程的同时处理消息的上限 则需要把当前消息加到消息队列之中
         if (the_worker.cur_process_num >= config_data.php_connect_num) {
             var msg_obj = {};
             msg_obj.client_id = client_id;
@@ -379,7 +391,7 @@ function doLogic(msg, client_id)
 
             work_process_manager.msg_queue_arr[worker_index].push(msg_obj);
 
-            log4js.MyError(" worker index %s now queue length %s ", worker_index, work_process_manager.msg_queue_arr[worker_index].length);
+            log4js.MyWarn(" worker index %s now queue length %s ", worker_index, work_process_manager.msg_queue_arr[worker_index].length);
             return;
         }
 
@@ -412,6 +424,56 @@ var broad_cast_handler = function do_broad_cast(client, msg, callback) {
     } 
 }
 
+// 处理消息
+function doMsgException(client, logStr)
+{
+    log4js.MyError(logStr);
+
+    let tmp_ret_msg_tb = {};
+    tmp_ret_msg_tb.error = "not correct msg";
+    //tmp_ret_msg_tb.msg_json_str = msg_json_str;
+    client.write(JSON.stringify(tmp_ret_msg_tb));
+
+    clientArr[client.id] = null;
+
+    client.end();
+    client.destroy();
+}
+
+// 检查每个连接的心跳是否超时，如果超时　则断开连接
+function checkConnectHeartBeat()
+{
+    log4js.MyDebug("checkConnectHeartBeat not to check connect heart beat");
+
+    //lib_util.computation();
+    //lib_util.computation();
+
+    let cur_sec = lib_util.getCurrentTimeStamp();
+    for (let index in clientArr) {
+        if (clientArr[index] == null) {
+            continue;
+        }
+
+        let gap_sec = cur_sec - clientArr[index].last_sec;
+
+        // 如果30s 还没有收到该连接的消息　则需要断开连接
+        if (gap_sec > 30) {
+
+            log4js.MyError(" this client no message sent for a long time, now to close id = %s gapSec = %s", index, gap_sec);
+        
+            clientArr[index].end();
+            clientArr[index].destroy();
+
+            clientArr[index] = null;
+        }
+    }
+
+    console.log('free 111 ' + os.freemem() / kb + 'kb\r\n');
+}
+
+// 每10s 检查一次　连接心跳
+setInterval(checkConnectHeartBeat, 10 * 1000);
+
 // 3 绑定链接事件
 server.on('connection', (client)=> {
     log4js.MyDebug("remote address = " + client.remoteAddress + " port = " + client.remotePort + " length = " + clientArr.length);
@@ -439,6 +501,7 @@ server.on('connection', (client)=> {
     }
     
     client.setEncoding('utf8');
+    client.setNoDelay(true);
 
     // 客户socket进程绑定事件
     client.on('data',(msg)=>{
@@ -446,7 +509,17 @@ server.on('connection', (client)=> {
         log4js.MyDebug(" recv msg client id = " + client.id + " msg = " + msg + " length = " + msg.length);
         log4js.MyDebug(" ===> " + typeof(msg));
 
+        if (lib_util.isBase64Str(msg) == false) {
+            doMsgException(client, " error msg msg =" + msg + " now to close this client ");
+            return;
+        }
+
         var buf = Buffer.from(msg , 'base64');
+
+        if (buf.length < 8) {
+            doMsgException(client, " error msg buff length < 8 now to close this client ");
+            return;
+        }
 
         let offset = 0;
         var user_id = buf.readUIntBE(offset, 4);
@@ -462,10 +535,7 @@ server.on('connection', (client)=> {
 
         let msg_tb = myUtil.strToJson(msg_json_str.toString());
         if (typeof(msg_tb) != 'object') {
-            let tmp_ret_msg_tb = {};
-            tmp_ret_msg_tb.error = "str can not to json";
-            //tmp_ret_msg_tb.msg_json_str = msg_json_str;
-            client.write(JSON.stringify(tmp_ret_msg_tb));
+            doMsgException(client, " str can not to json msg_json_str  " + msg_json_str.toString());
             return;
         }
 
@@ -475,6 +545,10 @@ server.on('connection', (client)=> {
         var msg = msg_tb.msg;
 
         console.log('free ' + os.freemem() / kb + 'kb\r\n');
+
+        // 记录每个连接上次接收消息的时间戳　用来做心跳检测
+        let curSec = lib_util.getCurrentTimeStamp();
+        client.last_sec = curSec;
 
         if (cmd == 101) {
             doLogic(msg, client.id);
