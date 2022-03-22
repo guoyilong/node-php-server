@@ -252,6 +252,56 @@ const createWorker = () => {
     work_process_manager.workers_map_index.push(compute.pid);
 
     log4js.MyDebug('worker process created, pid: %s ppid: %s', compute.pid, process.pid);
+
+      // 有消息事件过来　根据内容转发给对应的客户端连接
+    compute.on('message', result_json => {
+        
+        log4js.MyDebug("recv msg result_json = %s pid = %s", result_json, compute.pid);
+
+        // 该进程　正在处理的消息数量　也得往下减
+        if (compute.cur_process_num > 0) {
+            compute.cur_process_num -= 1;
+        }
+
+        var ret_json_tb = JSON.parse(result_json);
+
+        var the_msg_index = ret_json_tb['msg_index'];
+        var the_client_id = ret_json_tb['client_id'];
+
+        if (isNaN(the_msg_index) == true || isNaN(the_client_id) == true) {
+            log4js.MyError(" not find msg_index or client_id ret_json = %s", result_json);
+        }
+        else {
+
+            // todo 因为连接编号　可能被其他玩家的连接　替换　所以要检查玩家ID
+
+            client = clientArr[the_client_id];
+            if (client != null) {
+                client.write("result is " + result_json + " pid " + compute.pid);
+            }
+            else {
+                log4js.MyError(" this client has close connect client_id = %s ", the_client_id);
+            }
+        }
+
+        // 找该进程对应的编号　因为消息队列　记录的是　每个子进程对应的编号
+        var worker_index = getIndexByPid(compute.pid);
+        
+        // 检查该进程　
+        if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
+
+            // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
+            var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
+
+            log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
+
+            next_client_id = msg_obj.client_id;
+            next_msg = msg_obj.msg;
+
+            sendMsgToWorker(compute, worker_index, next_msg, next_client_id);
+        }
+
+    });	
 }	
 
 for (let i=0; i< config_data.worker_num; i++) {	
@@ -264,49 +314,6 @@ for (let i=0; i< config_data.worker_num; i++) {
 log4js.MyDebug(" process_num " + Object.keys(work_process_manager.workers_map).length);
 log4js.MyDebug(" workers_map_index = %s ", JSON.stringify(work_process_manager.workers_map_index));
 
-function waitMsgFromWorker(the_worker, worker_index, msg, client_id, cur_msg_index)
-{
-    log4js.MyDebug(" waitMsgToWorker now to user worker pid = " + the_worker.pid + " client id = " + client_id);
-
-    // 再次注册message 事件　等待自己的消息的返回
-    the_worker.once('message', result_json => {
-        log4js.MyDebug(" send msg = " + msg  + " result = " + result_json + " pid = " + the_worker.pid + " client id = " + client_id);
-
-        var ret_json_tb = JSON.parse(result_json);
-        if (ret_json_tb['msg_index'] != cur_msg_index) {
-            log4js.MyError(" not my msg my msg = %s ret msg = %s ", msg, ret_json_tb['msg']);
-            waitMsgFromWorker(the_worker, worker_index, msg, client_id, cur_msg_index);
-            
-            return;
-        }
-
-        the_worker.cur_process_num -= 1;
-        
-        client = clientArr[client_id];
-        if (client != null) {
-            client.write("result is " + result_json + " pid " + the_worker.pid);
-        }
-        else {
-            log4js.MyError(" this client has close connect client_id = %s ", client_id);
-        }
-
-        // 检查该进程　
-        if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
-
-            // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
-            var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
-
-            log4js.MyError(" worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
-
-            next_client_id = msg_obj.client_id;
-            next_msg = msg_obj.msg;
-
-            sendMsgToWorker(the_worker, worker_index, next_msg, next_client_id);
-        }
-    });	
-
-    //log4js.MyError("waitMsgToWorker sssssssssssssssssssssssssss===> test");
-}
 
 function sendMsgToWorker(the_worker, worker_index, msg, client_id)
 {
@@ -316,49 +323,10 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id)
     var msg_tb = {};
     msg_tb.msg = msg;
     msg_tb.msg_index = the_worker.send_msg_index;
+    msg_tb.client_id = client_id;
 
     the_worker.send(JSON.stringify(msg_tb)); 
     the_worker.cur_process_num += 1;
-    
-    // 事件注册之后　该函数的内存并没有清理消失掉　而是　等着事件触发　相当于回调　所以取得到msg_tb 
-    the_worker.once('message', result_json => {
-        log4js.MyDebug(" send msg = " + msg  + " result = " + result_json + " pid = " + the_worker.pid + " client id = " + client_id + " msg_index = " + msg_tb.msg_index);
-
-        var ret_json_tb = JSON.parse(result_json);
-        if (ret_json_tb['msg_index'] != msg_tb.msg_index) {
-            log4js.MyError(" not my msg my msg = %s ret msg = %s  ret_msg_index = %s cur_msg_index = %s", msg, ret_json_tb['msg'], ret_json_tb['msg_index'], msg_tb.msg_index);
-            
-            // 事件触发之后　如果不是当前函数发送的消息　需要再次注册message 事件　等待自已发送的消息的返回　
-            waitMsgFromWorker(the_worker, worker_index, msg, client_id, msg_tb.msg_index);
-            return;
-        }
-
-        the_worker.cur_process_num -= 1;
-        
-        client = clientArr[client_id];
-        if (client != null) {
-            client.write("result is " + result_json + " pid " + the_worker.pid);
-        }
-        else {
-            log4js.MyError(" this client has close connect client_id = %s ", client_id);
-        }
-
-        // 检查该进程　
-        if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
-
-            // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
-            var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
-
-            log4js.MyError(" worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
-
-            next_client_id = msg_obj.client_id;
-            next_msg = msg_obj.msg;
-
-            sendMsgToWorker(the_worker, worker_index, next_msg, next_client_id);
-        }
-    });	
-
-    //log4js.MyError("sssssssssssssssssssssssssss===> test");
     
 }
 
@@ -443,7 +411,7 @@ function doMsgException(client, logStr)
 // 检查每个连接的心跳是否超时，如果超时　则断开连接
 function checkConnectHeartBeat()
 {
-    log4js.MyDebug("checkConnectHeartBeat not to check connect heart beat");
+    //log4js.MyDebug("checkConnectHeartBeat not to check connect heart beat");
 
     //lib_util.computation();
     //lib_util.computation();
@@ -457,7 +425,7 @@ function checkConnectHeartBeat()
         let gap_sec = cur_sec - clientArr[index].last_sec;
 
         // 如果30s 还没有收到该连接的消息　则需要断开连接
-        if (gap_sec > 30) {
+        if (gap_sec > 300) {
 
             log4js.MyError(" this client no message sent for a long time, now to close id = %s gapSec = %s", index, gap_sec);
         
@@ -468,11 +436,11 @@ function checkConnectHeartBeat()
         }
     }
 
-    console.log('free 111 ' + os.freemem() / kb + 'kb\r\n');
+    log4js.MyDebug(" %s ", "free 111 " + (os.freemem() / kb) + "kb");
 }
 
 // 每10s 检查一次　连接心跳
-setInterval(checkConnectHeartBeat, 10 * 1000);
+setInterval(checkConnectHeartBeat, 100 * 1000);
 
 // 3 绑定链接事件
 server.on('connection', (client)=> {
