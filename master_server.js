@@ -78,7 +78,6 @@ function replaceOldWorker(oldPid) {
             replaceOldWorker(the_pid);
         });	
 
-
         compute.on('error', (err) => {	
 
             var the_pid = compute.pid;
@@ -139,7 +138,6 @@ function replaceOldWorker(oldPid) {
             replaceOldWorker(the_pid);
         });	
 
-        
         compute.isInUse = false;
         compute.cur_process_num = 0;
         compute.send_msg_index = 0;
@@ -149,7 +147,96 @@ function replaceOldWorker(oldPid) {
         work_process_manager.workers_map_index[old_index] = compute.pid;
 
         log4js.MyDebug(' replac old worker process created, newPid: %s ppid: %s oldPid: %s old_index: %s', compute.pid, process.pid, oldPid, old_index);
+
+          // 有消息事件过来　根据内容转发给对应的客户端连接
+        compute.on('message', result_json => {
+            
+            log4js.MyDebug("recv msg result_json = %s pid = %s", result_json, compute.pid);
+
+            // 该进程　正在处理的消息数量　也得往下减
+            if (compute.cur_process_num > 0) {
+                compute.cur_process_num -= 1;
+            }
+
+            var ret_json_tb = JSON.parse(result_json);
+
+            var the_msg_index = ret_json_tb['msg_index'];
+            var the_client_id = ret_json_tb['client_id'];
+
+            var i_msg_cmd = ret_json_tb['i_msg_cmd'];
+            var the_user_id = ret_json_tb['user_id'];
+
+            var need_send_to_client = true;
+            // 检查必要的消息头　是否都存在　缺一不可
+            if (isNaN(the_msg_index) == true || isNaN(the_client_id) == true || isNaN(i_msg_cmd) == true || isNaN(the_user_id) == true) {
+                log4js.MyError(" not find msg_index or client_id ret_json = %s", result_json);
+                need_send_to_client = false;
+            }
+
+            // 检查玩家ID 消息头　是否合法
+            if (need_send_to_client == true) {
+                if (the_user_id == 0 || checkMsgCmdIsLegal(i_msg_cmd) == false) {
+                    log4js.MyError(" error user_id = %s or i_msg_cmd = %s ret_json", the_user_id, i_msg_cmd, result_json);
+                    need_send_to_client = false;
+                }
+            }
+
+            var client = null;
+
+            // 检查连接是否存在
+            if (need_send_to_client == true) {
+                client = clientArr[the_client_id];
+                if (client == null) {
+                    need_send_to_client = false;
+                    log4js.MyError(" this client has close connect client_id = %s ", the_client_id);
+                }
+                else {
+                    // 检查该连接的会话　是否是同一个玩家　有可能有的消息处理很慢　连接都断开了　新连接进来了　替换它原来的位置　但是这可能是其他玩家的连接　
+                    // 所以当之前的消息返回时　要检查是否是当前的连接会话　如果不是　则不能下发给当前的连接
+                    if (client.bind_user_id != the_user_id) {
+                        log4js.MyError("cur logic msg not my client user_id = %s bind_user_id = %s ", the_user_id, client.bind_user_id);
+                        need_send_to_client = false;
+                    }  
+                }
+            }
+
+            if (need_send_to_client == true) {
+                // todo 如果是登录　则需要检查　登录是否成功　因为登录会做一些检查
+                if (i_msg_cmd == msg_cmd.do_login) {
+                    
+                }
+            }
+
+            if (need_send_to_client == true && client != null) {
+                client.write("result is " + result_json + " pid " + compute.pid);
+            }
+
+            // 找该进程对应的编号　因为消息队列　记录的是　每个子进程对应的编号
+            var worker_index = getIndexByPid(compute.pid);
+            
+            // 检查该进程　
+            if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
+
+                // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
+                var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
+
+                log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
+
+                next_client_id = msg_obj.client_id;
+                next_msg = msg_obj.msg;
+
+                sendMsgToWorker(compute, worker_index, next_msg, next_client_id);
+            }
+
+        });	
     }
+}
+
+function checkMsgCmdIsLegal(i_msg_cmd) {
+    if (i_msg_cmd == msg_cmd.do_login || i_msg_cmd == msg_cmd.logic_msg) {
+        return true;
+    }
+    return false;
 }
 
 const createWorker = () => {	
@@ -268,20 +355,52 @@ const createWorker = () => {
         var the_msg_index = ret_json_tb['msg_index'];
         var the_client_id = ret_json_tb['client_id'];
 
-        if (isNaN(the_msg_index) == true || isNaN(the_client_id) == true) {
+        var i_msg_cmd = ret_json_tb['i_msg_cmd'];
+        var the_user_id = ret_json_tb['user_id'];
+
+        var need_send_to_client = true;
+        // 检查必要的消息头　是否都存在　缺一不可
+        if (isNaN(the_msg_index) == true || isNaN(the_client_id) == true || isNaN(i_msg_cmd) == true || isNaN(the_user_id) == true) {
             log4js.MyError(" not find msg_index or client_id ret_json = %s", result_json);
+            need_send_to_client = false;
         }
-        else {
 
-            // todo 因为连接编号　可能被其他玩家的连接　替换　所以要检查玩家ID
-
-            client = clientArr[the_client_id];
-            if (client != null) {
-                client.write("result is " + result_json + " pid " + compute.pid);
+        // 检查玩家ID 消息头　是否合法
+        if (need_send_to_client == true) {
+            if (the_user_id == 0 || checkMsgCmdIsLegal(i_msg_cmd) == false) {
+                log4js.MyError(" error user_id = %s or i_msg_cmd = %s ret_json", the_user_id, i_msg_cmd, result_json);
+                need_send_to_client = false;
             }
-            else {
+        }
+
+        var client = null;
+
+        // 检查连接是否存在
+        if (need_send_to_client == true) {
+            client = clientArr[the_client_id];
+            if (client == null) {
+                need_send_to_client = false;
                 log4js.MyError(" this client has close connect client_id = %s ", the_client_id);
             }
+            else {
+                // 检查该连接的会话　是否是同一个玩家　有可能有的消息处理很慢　连接都断开了　新连接进来了　替换它原来的位置　但是这可能是其他玩家的连接　
+                // 所以当之前的消息返回时　要检查是否是当前的连接会话　如果不是　则不能下发给当前的连接
+                if (client.bind_user_id != the_user_id) {
+                    log4js.MyError("cur logic msg not my client user_id = %s bind_user_id = %s ", the_user_id, client.bind_user_id);
+                    need_send_to_client = false;
+                }  
+            }
+        }
+
+        if (need_send_to_client == true) {
+            // todo 如果是登录　则需要检查　登录是否成功　因为登录会做一些检查
+            if (i_msg_cmd == msg_cmd.do_login) {
+                
+            }
+        }
+
+        if (need_send_to_client == true && client != null) {
+            client.write("result is " + result_json + " pid " + compute.pid);
         }
 
         // 找该进程对应的编号　因为消息队列　记录的是　每个子进程对应的编号
@@ -295,10 +414,12 @@ const createWorker = () => {
 
             log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
 
-            next_client_id = msg_obj.client_id;
-            next_msg = msg_obj.msg;
+            var next_client_id = msg_obj.client_id;
+            var next_msg = msg_obj.msg;
+            var i_msg_cmd = msg_obj.i_msg_cmd;
+            var the_user_id = msg_obj.user_id;
 
-            sendMsgToWorker(compute, worker_index, next_msg, next_client_id);
+            sendMsgToWorker(compute, worker_index, next_msg, next_client_id, i_msg_cmd, the_user_id);
         }
 
     });	
@@ -315,7 +436,7 @@ log4js.MyDebug(" process_num " + Object.keys(work_process_manager.workers_map).l
 log4js.MyDebug(" workers_map_index = %s ", JSON.stringify(work_process_manager.workers_map_index));
 
 
-function sendMsgToWorker(the_worker, worker_index, msg, client_id)
+function sendMsgToWorker(the_worker, worker_index, msg, client_id, i_msg_cmd, user_id)
 {
     log4js.MyDebug(" now to user worker pid = " + the_worker.pid + " client id = " + client_id);
 
@@ -324,13 +445,15 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id)
     msg_tb.msg = msg;
     msg_tb.msg_index = the_worker.send_msg_index;
     msg_tb.client_id = client_id;
+    msg_tb.i_msg_cmd = i_msg_cmd;
+    msg_tb.user_id = user_id;
 
     the_worker.send(JSON.stringify(msg_tb)); 
     the_worker.cur_process_num += 1;
     
 }
 
-function doLogic(msg, client_id)
+function doLogic(msg, client_id, i_msg_cmd, user_id)
 {
     var workers_num = work_process_manager.workers_map_index.length;
 
@@ -350,6 +473,8 @@ function doLogic(msg, client_id)
             var msg_obj = {};
             msg_obj.client_id = client_id;
             msg_obj.msg = msg;
+            msg_obj.i_msg_cmd = i_msg_cmd;
+            msg_obj.user_id = user_id;
 
             log4js.MyWarn(" cur_process_num %s add msg to queue msg %s client_id %s", the_worker.cur_process_num, msg, client_id);
 
@@ -363,7 +488,7 @@ function doLogic(msg, client_id)
             return;
         }
 
-        sendMsgToWorker(the_worker, worker_index, msg, client_id);
+        sendMsgToWorker(the_worker, worker_index, msg, client_id, i_msg_cmd, user_id);
     }
 }
 
@@ -442,6 +567,11 @@ function checkConnectHeartBeat()
 // 每10s 检查一次　连接心跳
 setInterval(checkConnectHeartBeat, 100 * 1000);
 
+var msg_cmd = {
+    'do_login': 101,
+    'logic_msg': 201
+};
+
 // 3 绑定链接事件
 server.on('connection', (client)=> {
     log4js.MyDebug("remote address = " + client.remoteAddress + " port = " + client.remotePort + " length = " + clientArr.length);
@@ -471,6 +601,11 @@ server.on('connection', (client)=> {
     client.setEncoding('utf8');
     client.setNoDelay(true);
 
+    client.bind_user_id = 0;
+
+    let the_cur_sec = lib_util.getCurrentTimeStamp();
+    client.last_sec = the_cur_sec;
+
     // 客户socket进程绑定事件
     client.on('data',(msg)=>{
 
@@ -484,17 +619,43 @@ server.on('connection', (client)=> {
 
         var buf = Buffer.from(msg , 'base64');
 
-        if (buf.length < 8) {
+        if (buf.length < 12) {
             doMsgException(client, " error msg buff length < 8 now to close this client ");
             return;
         }
 
         let offset = 0;
+
+        var i_msg_cmd = buf.readUIntBE(offset, 4);
+        offset += 4;
+
         var user_id = buf.readUIntBE(offset, 4);
         offset += 4;
 
         let msg_len = buf.readUIntBE(offset, 4);
         offset += 4;
+
+        log4js.MyWarn("i_msg_cmd %s user_id = %s ", i_msg_cmd, user_id);
+
+        // 检查包头是否合法
+        if (user_id <= 0 || checkMsgCmdIsLegal(i_msg_cmd) == false) {
+            doMsgException(client, "errog head package user_id = " + user_id + " i_msg_cmd = " + i_msg_cmd);
+            return;
+        }
+
+        // 检查是否是登录
+        if (i_msg_cmd == msg_cmd.do_login) {
+            // 这里先绑定玩家ID 因为玩家ID 是每条消息必发的　
+            client.bind_user_id = user_id;
+        }
+        else if (i_msg_cmd == msg_cmd.logic_msg) {
+            // 如果是逻辑命令　则需要检查　是否有形成会话　如果没有　则是跳过登录　直接发送逻辑命令　则是非法的　直接踢掉
+            
+            if (client.bind_user_id == 0) {
+                doMsgException(client, "the client not has login user_id = " + user_id);
+                return;
+            }
+        }
         
         //log4js.MyDebug(" ===> offset = " + offset + " msg_len = " + msg_len);
 
@@ -519,7 +680,7 @@ server.on('connection', (client)=> {
         client.last_sec = curSec;
 
         if (cmd == 101) {
-            doLogic(msg, client.id);
+            doLogic(msg, client.id, i_msg_cmd, user_id);
         }
         else {
 
