@@ -47,6 +47,80 @@ function getIndexByPid(pid)
     return the_index;
 }
 
+function getClient_WorkerIndex(client_id)
+{
+    var workers_num = work_process_manager.workers_map_index.length;
+
+    var cur_client_index = client_id;
+    var worker_index = cur_client_index % workers_num;
+    return worker_index;
+}
+
+// 当进程替换时 　检查旧的进程是否还有消息堆积　如果有　得清空掉
+// 该子进程　对应的所有客户端连接　都踢下线　重新登录 每个子进程　就像一组单独的服务器 服务器宕机了　肯定该服务器上的玩家　都得掉线
+function checkIsHasStackMsg(worker_index)
+{
+    var user_arr = {};
+    // 检查该进程　
+    if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
+
+        console.log(" ======>  " + JSON.stringify(work_process_manager.msg_queue_arr[worker_index]));
+
+        var total_len = work_process_manager.msg_queue_arr[worker_index].length;
+        for (var i = 0; i < total_len; i++) {
+            // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
+            var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
+
+            log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
+
+            var the_user_id = msg_obj.user_id;
+            if (user_arr.hasOwnProperty(the_user_id) == true) {
+                user_arr[the_user_id] += 1;
+            }
+            else {
+                user_arr[the_user_id] = 1;
+            }
+        }
+
+        log4js.MyError("checkIsHasStackMsg this user has msg in server not process user_arr =  %s", JSON.stringify(user_arr));
+    }
+
+    // 将该子进程对应的所有连接都踢下线
+    for (let i in clientArr) {
+        let the_client = clientArr[i];
+        
+        if (the_client == null) {
+            continue;
+        }
+
+        var tmp_id = the_client.id;
+        var the_worker_index = getClient_WorkerIndex(tmp_id);
+
+        if (the_worker_index == worker_index) {
+            doMsgException(the_client, "this worker process has dump ");
+        }
+    }
+}
+
+// 如果玩家已经在线　后面又有玩家登录　而且是同一玩家　这时　之前的玩家连接　得被踢掉
+function checkOtherClientOnLine(the_user_id, client_id)
+{
+    for (let i in clientArr) {
+        let the_client = clientArr[i];
+        
+        if (the_client == null) {
+            continue;
+        }
+
+        var tmp_id = the_client.id;
+        var tmp_user_id = the_client.bind_user_id;
+
+        if (tmp_user_id == the_user_id && client_id != tmp_id) {
+            doMsgException(the_client, "other client is login");
+        }
+    }
+}
+
 // 某一个子进程关闭　新建一个子进程　替换原来的子进程　继续提供分发服务
 function replaceOldWorker(oldPid) {
 
@@ -54,6 +128,8 @@ function replaceOldWorker(oldPid) {
     var old_index = getIndexByPid(oldPid);
 
     if (old_index >= 0) {
+        checkIsHasStackMsg(old_index);
+
         const compute = fork('./php_worker.js');	
         compute.has_close = false;
         // 当一个子进程使用 process.send() 发送消息时会触发 'message' 事件	
@@ -203,7 +279,8 @@ function replaceOldWorker(oldPid) {
             if (need_send_to_client == true) {
                 // todo 如果是登录　则需要检查　登录是否成功　因为登录会做一些检查
                 if (i_msg_cmd == msg_cmd.do_login) {
-                    
+                    // todo 检查是否登录成功　如果成功　则需要检查该玩家已经在线　如果已经在线　得踢掉前面的连接
+                    checkOtherClientOnLine(the_user_id, the_client_id);
                 }
             }
 
@@ -222,10 +299,12 @@ function replaceOldWorker(oldPid) {
 
                 log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
 
-                next_client_id = msg_obj.client_id;
-                next_msg = msg_obj.msg;
+                var next_client_id = msg_obj.client_id;
+                var next_msg = msg_obj.msg;
+                var i_msg_cmd = msg_obj.i_msg_cmd;
+                var the_user_id = msg_obj.user_id;
 
-                sendMsgToWorker(compute, worker_index, next_msg, next_client_id);
+                sendMsgToWorker(compute, worker_index, next_msg, next_client_id, i_msg_cmd, the_user_id);
             }
 
         });	
@@ -395,7 +474,8 @@ const createWorker = () => {
         if (need_send_to_client == true) {
             // todo 如果是登录　则需要检查　登录是否成功　因为登录会做一些检查
             if (i_msg_cmd == msg_cmd.do_login) {
-                
+                // todo 检查是否登录成功　如果成功　则需要检查该玩家已经在线　如果已经在线　得踢掉前面的连接
+                checkOtherClientOnLine(the_user_id, the_client_id);
             }
         }
 
