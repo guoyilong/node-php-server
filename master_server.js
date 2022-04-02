@@ -6,29 +6,32 @@ const cpus = require('os').cpus();
 // 1 引入模块
 const net = require('net');
 
+//var heapdump = require('heapdump');
+
 const log4js = require('./lib/log_utils.js'); // 引入库
 const lib_util = require('./lib/util');
 
-os = require('os');
-var kb = 1024;
+//os = require('os');
+//var kb = 1024;
 
-console.log('free ' + os.freemem() / kb + 'kb\r\n');
-
-global.do_logic_num = 0;
+//console.log('free ' + os.freemem() / kb + 'kb\r\n');
 
 // 读取配置文件
 const myUtil = require('./lib/util');
+const ms = require('ms');
 const config_data = myUtil.loadjson('./config/config.json');
 log4js.MyDebug(" load config success server ip = %s port = %s worker_num = %s ", config_data.server_ip, config_data.server_port, config_data.worker_num);
 
 
 // 2 创建服务器
-let clientArr = [];
+var clientArr = [];
 const server = net.createServer();
 
 const broad_cast_server = net.createServer();
 
 const work_process_manager = {};
+
+global.last_gc_time_msec = 0;
 
 work_process_manager.process_num = 0;
 work_process_manager.workers_map = {};
@@ -37,8 +40,8 @@ work_process_manager.msg_queue_arr = {};
 
 function getIndexByPid(pid)
 {
-    var the_index = -1;
-    for (var i = 0; i < work_process_manager.workers_map_index.length; i++) {
+    let the_index = -1;
+    for (let i = 0; i < work_process_manager.workers_map_index.length; i++) {
         if (work_process_manager.workers_map_index[i] == pid) {
             the_index = i;
             break;
@@ -49,10 +52,10 @@ function getIndexByPid(pid)
 
 function getClient_WorkerIndex(client_id)
 {
-    var workers_num = work_process_manager.workers_map_index.length;
+    let workers_num = work_process_manager.workers_map_index.length;
 
-    var cur_client_index = client_id;
-    var worker_index = cur_client_index % workers_num;
+    let cur_client_index = client_id;
+    let worker_index = cur_client_index % workers_num;
     return worker_index;
 }
 
@@ -60,20 +63,20 @@ function getClient_WorkerIndex(client_id)
 // 该子进程　对应的所有客户端连接　都踢下线　重新登录 每个子进程　就像一组单独的服务器 服务器宕机了　肯定该服务器上的玩家　都得掉线
 function checkIsHasStackMsg(worker_index)
 {
-    var user_arr = {};
+    let user_arr = {};
     // 检查该进程　
     if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
 
         console.log(" ======>  " + JSON.stringify(work_process_manager.msg_queue_arr[worker_index]));
 
-        var total_len = work_process_manager.msg_queue_arr[worker_index].length;
-        for (var i = 0; i < total_len; i++) {
+        let total_len = work_process_manager.msg_queue_arr[worker_index].length;
+        for (let i = 0; i < total_len; i++) {
             // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
-            var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
+            let msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
 
             log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
 
-            var the_user_id = msg_obj.user_id;
+            let the_user_id = msg_obj.user_id;
             if (user_arr.hasOwnProperty(the_user_id) == true) {
                 user_arr[the_user_id] += 1;
             }
@@ -93,8 +96,8 @@ function checkIsHasStackMsg(worker_index)
             continue;
         }
 
-        var tmp_id = the_client.id;
-        var the_worker_index = getClient_WorkerIndex(tmp_id);
+        let tmp_id = the_client.id;
+        let the_worker_index = getClient_WorkerIndex(tmp_id);
 
         if (the_worker_index == worker_index) {
             doMsgException(the_client, "this worker process has dump ");
@@ -112,8 +115,8 @@ function checkOtherClientOnLine(the_user_id, client_id)
             continue;
         }
 
-        var tmp_id = the_client.id;
-        var tmp_user_id = the_client.bind_user_id;
+        let tmp_id = the_client.id;
+        let tmp_user_id = the_client.bind_user_id;
 
         if (tmp_user_id == the_user_id && client_id != tmp_id) {
             doMsgException(the_client, "other client is login");
@@ -429,15 +432,15 @@ const createWorker = () => {
             compute.cur_process_num -= 1;
         }
 
-        var ret_json_tb = JSON.parse(result_json);
+        let ret_json_tb = JSON.parse(result_json);
 
-        var the_msg_index = ret_json_tb['msg_index'];
-        var the_client_id = ret_json_tb['client_id'];
+        let the_msg_index = ret_json_tb['msg_index'];
+        let the_client_id = ret_json_tb['client_id'];
 
-        var i_msg_cmd = ret_json_tb['i_msg_cmd'];
-        var the_user_id = ret_json_tb['user_id'];
+        let i_msg_cmd = ret_json_tb['i_msg_cmd'];
+        let the_user_id = ret_json_tb['user_id'];
 
-        var need_send_to_client = true;
+        let need_send_to_client = true;
         // 检查必要的消息头　是否都存在　缺一不可
         if (isNaN(the_msg_index) == true || isNaN(the_client_id) == true || isNaN(i_msg_cmd) == true || isNaN(the_user_id) == true) {
             log4js.MyError(" not find msg_index or client_id ret_json = %s", result_json);
@@ -452,7 +455,7 @@ const createWorker = () => {
             }
         }
 
-        var client = null;
+        let client = null;
 
         // 检查连接是否存在
         if (need_send_to_client == true) {
@@ -481,26 +484,31 @@ const createWorker = () => {
 
         if (need_send_to_client == true && client != null) {
             client.write("result is " + result_json + " pid " + compute.pid);
+            result_json = null;
         }
 
         // 找该进程对应的编号　因为消息队列　记录的是　每个子进程对应的编号
-        var worker_index = getIndexByPid(compute.pid);
+        let worker_index = getIndexByPid(compute.pid);
         
         // 检查该进程　
         if (work_process_manager.msg_queue_arr.hasOwnProperty(worker_index) == true && work_process_manager.msg_queue_arr[worker_index].length > 0) {
 
             // 说明有客户端的消息　在消息队列中　堆集 这时得顺序处理
-            var msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
+            let msg_obj = work_process_manager.msg_queue_arr[worker_index].shift();
 
             log4js.MyError(" now get msg obj from queue worker index = %s msg obj = %s left len = %s ", worker_index, JSON.stringify(msg_obj), work_process_manager.msg_queue_arr[worker_index].length);
 
-            var next_client_id = msg_obj.client_id;
-            var next_msg = msg_obj.msg;
-            var i_msg_cmd = msg_obj.i_msg_cmd;
-            var the_user_id = msg_obj.user_id;
+            let next_client_id = msg_obj.client_id;
+            let next_msg = msg_obj.msg;
+            let next_i_msg_cmd = msg_obj.i_msg_cmd;
+            let next_user_id = msg_obj.user_id;
 
-            sendMsgToWorker(compute, worker_index, next_msg, next_client_id, i_msg_cmd, the_user_id);
+            sendMsgToWorker(compute, worker_index, next_msg, next_client_id, next_i_msg_cmd, next_user_id);
+
+            msg_obj = null;
         }
+
+        client = null;
 
     });	
 }	
@@ -508,7 +516,7 @@ const createWorker = () => {
 for (let i=0; i< config_data.worker_num; i++) {	
     createWorker();	
 
-    console.log('free 111 ' + os.freemem() / kb + 'kb\r\n');
+    //console.log('free 111 ' + os.freemem() / kb + 'kb\r\n');
 }
 
 
@@ -521,7 +529,7 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id, i_msg_cmd, us
     log4js.MyDebug(" now to user worker pid = " + the_worker.pid + " client id = " + client_id);
 
     the_worker.send_msg_index += 1;
-    var msg_tb = {};
+    let msg_tb = {};
     msg_tb.msg = msg;
     msg_tb.msg_index = the_worker.send_msg_index;
     msg_tb.client_id = client_id;
@@ -530,27 +538,28 @@ function sendMsgToWorker(the_worker, worker_index, msg, client_id, i_msg_cmd, us
 
     the_worker.send(JSON.stringify(msg_tb)); 
     the_worker.cur_process_num += 1;
-    
+
+    msg_tb = null;
 }
 
 function doLogic(msg, client_id, i_msg_cmd, user_id)
 {
-    var workers_num = work_process_manager.workers_map_index.length;
+    let workers_num = work_process_manager.workers_map_index.length;
 
     // 不同的连接的编号　在不同工作子进程中处理　保证同一个连接过来的数据　在同一个工作子进程中处理　
-    var cur_client_index = client_id;
-    var worker_index = cur_client_index % workers_num;
-    var worker_pid = work_process_manager.workers_map_index[worker_index];
+    let cur_client_index = client_id;
+    let worker_index = cur_client_index % workers_num;
+    let worker_pid = work_process_manager.workers_map_index[worker_index];
 
     log4js.MyDebug(" doLogic client id %s workers_num %s worker_index %s worker_pid %s", client_id, workers_num, worker_index, worker_pid);
 
     if (work_process_manager.workers_map.hasOwnProperty(worker_pid)) {
 
-        var the_worker = work_process_manager.workers_map[worker_pid];
+        let the_worker = work_process_manager.workers_map[worker_pid];
 
         // 如果该子进程　已经有多条消息在处理　且处理的消息的数量　超出了子进程的同时处理消息的上限 则需要把当前消息加到消息队列之中
         if (the_worker.cur_process_num >= config_data.php_connect_num) {
-            var msg_obj = {};
+            let msg_obj = {};
             msg_obj.client_id = client_id;
             msg_obj.msg = msg;
             msg_obj.i_msg_cmd = i_msg_cmd;
@@ -565,6 +574,8 @@ function doLogic(msg, client_id, i_msg_cmd, user_id)
             work_process_manager.msg_queue_arr[worker_index].push(msg_obj);
 
             log4js.MyWarn(" worker index %s now queue length %s ", worker_index, work_process_manager.msg_queue_arr[worker_index].length);
+            
+            msg_obj = null;
             return;
         }
 
@@ -613,6 +624,31 @@ function doMsgException(client, logStr)
     client.destroy();
 }
 
+/**
+ * 单位为字节格式为 MB 输出
+ */
+ const format = function (bytes) {
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+};
+
+/**
+ * 封装 print 方法输出内存占用信息 
+ */
+const mem_print = function() {
+    let memoryUsage = process.memoryUsage();
+
+    log4js.MyError(" memory info = %s ", JSON.stringify({
+        rss: format(memoryUsage.rss),
+        heapTotal: format(memoryUsage.heapTotal),
+        heapUsed: format(memoryUsage.heapUsed),
+        external: format(memoryUsage.external),
+        arrayBuffers: format(memoryUsage.arrayBuffers),
+    }));
+
+    memoryUsage = null;
+}
+
+
 // 检查每个连接的心跳是否超时，如果超时　则断开连接
 function checkConnectHeartBeat()
 {
@@ -622,6 +658,11 @@ function checkConnectHeartBeat()
     //lib_util.computation();
 
     let cur_sec = lib_util.getCurrentTimeStamp();
+
+    if (global.last_gc_time_msec == 0) {
+        global.last_gc_time_msec = cur_sec;
+    }
+
     for (let index in clientArr) {
         if (clientArr[index] == null) {
             continue;
@@ -641,7 +682,25 @@ function checkConnectHeartBeat()
         }
     }
 
-    log4js.MyDebug(" %s ", "free 111 " + (os.freemem() / kb) + "kb");
+    let gap_sec = cur_sec - global.last_gc_time_msec;
+    if (gap_sec >= 300) {
+        let mem = process.memoryUsage();
+        let the_start_msec = Date.now();
+
+        //heapdump.writeSnapshot(Date.now() + '.heapsnapshot');
+
+        mem_print();
+
+        global.gc();
+
+        mem_print();
+
+        let the_cost_msec = Date.now() - the_start_msec;
+        log4js.MyError('memery,heapUsed %s M cost time = %s ms', ((process.memoryUsage().heapUsed - mem.heapUsed)/1024/1024).toFixed(5), the_cost_msec);
+        global.last_gc_time_msec = cur_sec;
+
+        mem = null;
+    }
 }
 
 // 每10s 检查一次　连接心跳
@@ -657,7 +716,7 @@ server.on('connection', (client)=> {
     log4js.MyDebug("remote address = " + client.remoteAddress + " port = " + client.remotePort + " length = " + clientArr.length);
     
     // 先找出空的位置　
-    var allocate_index = -1;
+    let allocate_index = -1;
     for (let index in clientArr) {
         if (clientArr[index] == null) {
             allocate_index = index;
@@ -678,7 +737,7 @@ server.on('connection', (client)=> {
         clientArr[allocate_index] = client;
     }
     
-    client.setEncoding('utf8');
+    //client.setEncoding('utf8');
     client.setNoDelay(true);
 
     client.bind_user_id = 0;
@@ -687,17 +746,20 @@ server.on('connection', (client)=> {
     client.last_sec = the_cur_sec;
 
     // 客户socket进程绑定事件
-    client.on('data',(msg)=>{
+    client.on('data',(buf)=>{
 
-        log4js.MyDebug(" recv msg client id = " + client.id + " msg = " + msg + " length = " + msg.length);
-        log4js.MyDebug(" ===> " + typeof(msg));
+        //log4js.MyDebug(" recv msg client id = " + client.id + " msg = " + msg + " length = " + msg.length);
+        log4js.MyDebug(" ===> " + typeof(buf) + " length " + client.bytesRead);
 
+        /*
         if (lib_util.isBase64Str(msg) == false) {
             doMsgException(client, " error msg msg =" + msg + " now to close this client ");
             return;
         }
+        */
 
-        var buf = Buffer.from(msg , 'base64');
+        //let buf = Buffer.from(msg, 'string');
+        //let buf = msg;
 
         if (buf.length < 12) {
             doMsgException(client, " error msg buff length < 8 now to close this client ");
@@ -706,10 +768,10 @@ server.on('connection', (client)=> {
 
         let offset = 0;
 
-        var i_msg_cmd = buf.readUIntBE(offset, 4);
+        let i_msg_cmd = buf.readUIntBE(offset, 4);
         offset += 4;
 
-        var user_id = buf.readUIntBE(offset, 4);
+        let user_id = buf.readUIntBE(offset, 4);
         offset += 4;
 
         let msg_len = buf.readUIntBE(offset, 4);
@@ -739,10 +801,17 @@ server.on('connection', (client)=> {
         
         //log4js.MyDebug(" ===> offset = " + offset + " msg_len = " + msg_len);
 
-        var msg_json_str = buf.slice(offset, offset + msg_len);
-        log4js.MyDebug("user_id =  " + user_id + " msg_len = " + msg_len + " offset " + offset +  " json_str = " + msg_json_str);
+        let msg_json_str = buf.slice(offset, offset + msg_len);
+        log4js.MyDebug("user_id =  " + user_id + " msg_len = " + msg_len + " offset " + offset +  " decode_json_str = " + msg_json_str);
 
-        let msg_tb = myUtil.strToJson(msg_json_str.toString());
+        let record_msec = Date.now();
+
+        let decode_str = myUtil.deCode(msg_json_str.toString());
+
+        let cost_msec = Date.now() - record_msec;
+        console.log("----------------> %d ", cost_msec);
+
+        let msg_tb = myUtil.strToJson(decode_str);
         if (typeof(msg_tb) != 'object') {
             doMsgException(client, " str can not to json msg_json_str  " + msg_json_str.toString());
             return;
@@ -750,23 +819,25 @@ server.on('connection', (client)=> {
 
         log4js.MyDebug(" recv msg   user_id = " + msg_tb.user_id + " cmd = " + msg_tb.cmd + " msg = " + msg_tb.msg);
 
-        var cmd = msg_tb.cmd;
-        var msg = msg_tb.msg;
+        let cmd = msg_tb.cmd;
+        let recv_msg = msg_tb.msg;
 
-        console.log('free ' + os.freemem() / kb + 'kb\r\n');
+        //console.log('free ' + os.freemem() / kb + 'kb\r\n');
 
         // 记录每个连接上次接收消息的时间戳　用来做心跳检测
         let curSec = lib_util.getCurrentTimeStamp();
         client.last_sec = curSec;
 
         if (cmd == 101) {
-            doLogic(msg, client.id, i_msg_cmd, user_id);
+            doLogic(recv_msg, client.id, i_msg_cmd, user_id);
         }
         else {
 
             if (cmd == 102) {
             }
         }
+
+        buf = null;
 
     });
 
