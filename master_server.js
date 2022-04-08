@@ -1,10 +1,12 @@
 const http = require('http');	
-var util = require("util");
+//var util = require("util");
 const fork = require('child_process').fork;
 const cpus = require('os').cpus();
 
 // 1 引入模块
 const net = require('net');
+
+//const util = require('./lib/util');
 
 //var heapdump = require('heapdump');
 
@@ -749,7 +751,7 @@ server.on('connection', (client)=> {
     client.on('data',(buf)=>{
 
         //log4js.MyDebug(" recv msg client id = " + client.id + " msg = " + msg + " length = " + msg.length);
-        log4js.MyDebug(" ===> " + typeof(buf) + " length " + client.bytesRead);
+        log4js.MyDebug(" ===> " + typeof(buf) + " length " + client.bytesRead + " client id = " + client.id);
 
         /*
         if (lib_util.isBase64Str(msg) == false) {
@@ -777,7 +779,7 @@ server.on('connection', (client)=> {
         let msg_len = buf.readUIntBE(offset, 4);
         offset += 4;
 
-        log4js.MyWarn("i_msg_cmd %s user_id = %s ", i_msg_cmd, user_id);
+        log4js.MyWarn("i_msg_cmd %s user_id = %s client id = %s ", i_msg_cmd, user_id, client.id);
 
         // 检查包头是否合法
         if (user_id <= 0 || checkMsgCmdIsLegal(i_msg_cmd) == false) {
@@ -794,6 +796,28 @@ server.on('connection', (client)=> {
             // 如果是逻辑命令　则需要检查　是否有形成会话　如果没有　则是跳过登录　直接发送逻辑命令　则是非法的　直接踢掉
             
             if (client.bind_user_id == 0) {
+
+                let msg_json_str = buf.slice(offset, offset + msg_len);
+                log4js.MyError("user_id =  " + user_id + " msg_len = " + msg_len + " offset " + offset +  " decode_json_str = " + msg_json_str);
+
+                let decode_str = myUtil.deCode(msg_json_str.toString());
+
+                log4js.MyError(" cur client id = " + client.id + " decode_str = " + decode_str);
+
+                for (let i in clientArr) {
+
+                    let the_client = clientArr[i];
+                    // 自己当前的的连接不发 为空的连接不发
+                    if (the_client == null) {
+                        continue;
+                    }
+                    
+                    if (the_client.bind_user_id == user_id) {
+                        log4js.MyError(" real client id = " + the_client.id + " cur_bind_user_id = " + the_client.bind_user_id);
+                        break;
+                    }
+                }
+
                 doMsgException(client, "the client not has login user_id = " + user_id);
                 return;
             }
@@ -927,4 +951,23 @@ broad_cast_server.listen(config_data.server_port + 1, config_data.server_ip, () 
     log4js.MyDebug('打开服务器 %s', broad_cast_server.address());
 });
 
+
+// 接收进程退出的信号
+process.on("SIGINT", function() {
+    console.log("receive signal SIGINT");
+    process.exit(1001);
+});
+
+process.on("SIGTERM", function() {
+    console.log("receive signal SIGTERM");
+    process.exit(1002);
+});
+
+process.on("SIGHUP", function() {
+    console.log("接收到退出指令");
+});
+
+process.on("exit", function() {
+    console.log("master exit");
+});
 
