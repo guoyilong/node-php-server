@@ -2,6 +2,9 @@
 const net = require('net');
 const { exit } = require('process');
 const readline = require('readline');
+
+const myUtil = require('../lib/util');
+
 //const { json } = require('stream/consumers');
 // 2 创建套接字和输入输出命令行
 let rl = readline.createInterface({
@@ -66,6 +69,8 @@ function sendLogin(the_user_id)
 
     tb_str = JSON.stringify(tb);
 
+    tb_str = myUtil.enCode(tb_str);
+
     console.log("send msg json = " + tb_str);
 
     buf.writeUIntBE(msg_cmd.do_login, 0, 4);
@@ -104,7 +109,8 @@ function sendLogin(the_user_id)
 
     // 发送
     startMsec = Date.now();
-    send_len = client.write(buf.slice(0, offset).toString('base64',0, offset));
+    //send_len = client.write(buf.slice(0, offset).toString('base64',0, offset));
+    send_len = client.write(buf.slice(0, offset));
 }
 
 sendLogin(the_user_id);
@@ -127,6 +133,7 @@ rl.on('line',(mes)=>{
     tb.msg = mes;
 
     tb_str = JSON.stringify(tb);
+    tb_str = myUtil.enCode(tb_str);
 
     console.log("send msg json = " + tb_str + " i_msg_cmd = " + msg_cmd.logic_msg);
 
@@ -164,7 +171,9 @@ rl.on('line',(mes)=>{
 
     // 发送
     startMsec = Date.now();
-    send_len = client.write(buf.slice(0, offset).toString('base64',0, offset));
+    //send_len = client.write(buf.slice(0, offset).toString('base64',0, offset));
+
+    send_len = client.write(buf.slice(0, offset));
 
     //console.log("send len = " + send_len);
      
