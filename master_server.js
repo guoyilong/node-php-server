@@ -553,7 +553,7 @@ function doLogic(msg, client_id, i_msg_cmd, user_id)
     let worker_index = cur_client_index % workers_num;
     let worker_pid = work_process_manager.workers_map_index[worker_index];
 
-    log4js.MyDebug(" doLogic client id %s workers_num %s worker_index %s worker_pid %s", client_id, workers_num, worker_index, worker_pid);
+    //log4js.MyDebug(" doLogic client id %s workers_num %s worker_index %s worker_pid %s", client_id, workers_num, worker_index, worker_pid);
 
     if (work_process_manager.workers_map.hasOwnProperty(worker_pid)) {
 
@@ -610,20 +610,22 @@ var broad_cast_handler = function do_broad_cast(client, msg, callback) {
     } 
 }
 
-// 处理消息
-function doMsgException(client, logStr)
+// 处理消息异常
+function doMsgException(client, logStr, close_client = true)
 {
     log4js.MyError(logStr);
 
     let tmp_ret_msg_tb = {};
-    tmp_ret_msg_tb.error = "not correct msg";
+    tmp_ret_msg_tb.error = logStr;
     //tmp_ret_msg_tb.msg_json_str = msg_json_str;
     client.write(JSON.stringify(tmp_ret_msg_tb));
 
-    clientArr[client.id] = null;
+    if (close_client == true)  {
+        clientArr[client.id] = null;
 
-    client.end();
-    client.destroy();
+        client.end();
+        client.destroy();
+    }
 }
 
 /**
@@ -713,6 +715,126 @@ var msg_cmd = {
     'logic_msg': 201
 };
 
+function doProcessStickyBagMsg(client, buf)
+{
+    log4js.MyError(" doProcessStickyBagMsg sticky bag ms len =  %s ", buf.length);
+
+    let tmp_len = 0;
+    let total_buf_len = buf.length;
+
+    while(tmp_len < total_buf_len) {
+        
+        let offset = tmp_len;
+
+        let left_len = total_buf_len - tmp_len;
+
+        if (left_len <= 12) {
+            tmp_len = total_buf_len;
+            doMsgException(client, "msg error msg_len = " + left_len, false);
+            break;
+        }
+
+        let i_msg_cmd = buf.readUIntBE(offset, 4);
+        offset += 4;
+
+        let user_id = buf.readUIntBE(offset, 4);
+        offset += 4;
+
+        let msg_len = buf.readUIntBE(offset, 4);
+        offset += 4;
+
+        tmp_len += 12;
+        tmp_len += msg_len;
+
+        log4js.MyWarn(" doProcessStickyBagMsg i_msg_cmd %s user_id = %s client id = %s ", i_msg_cmd, user_id, client.id);
+
+        // 检查包头是否合法
+        if (user_id <= 0 || checkMsgCmdIsLegal(i_msg_cmd) == false) {
+            console.log("******************> erro cmd = " + i_msg_cmd + " user_id = " + user_id);
+            doMsgException(client, "errog head package user_id = " + user_id + " i_msg_cmd = " + i_msg_cmd, false);
+            continue;
+        }
+
+        // 检查是否是登录
+        if (i_msg_cmd == msg_cmd.do_login) {
+            // 这里先绑定玩家ID 因为玩家ID 是每条消息必发的　
+            client.bind_user_id = user_id;
+        }
+        else if (i_msg_cmd == msg_cmd.logic_msg) {
+            // 如果是逻辑命令　则需要检查　是否有形成会话　如果没有　则是跳过登录　直接发送逻辑命令　则是非法的　直接踢掉
+            
+            if (client.bind_user_id == 0) {
+
+                let msg_json_str = buf.slice(offset, offset + msg_len);
+                log4js.MyError("doProcessStickyBagMsg user_id =  " + user_id + " msg_len = " + msg_len + " offset " + offset +  " decode_json_str = " + msg_json_str);
+
+                let decode_str = myUtil.deCode(msg_json_str.toString());
+
+                log4js.MyError("doProcessStickyBagMsg cur client id = " + client.id + " decode_str = " + decode_str);
+
+                for (let i in clientArr) {
+
+                    let the_client = clientArr[i];
+                    // 自己当前的的连接不发 为空的连接不发
+                    if (the_client == null) {
+                        continue;
+                    }
+                    
+                    if (the_client.bind_user_id == user_id) {
+                        log4js.MyError(" doProcessStickyBagMsg real client id = " + the_client.id + " cur_bind_user_id = " + the_client.bind_user_id);
+                        break;
+                    }
+                }
+
+                doMsgException(client, " doProcessStickyBagMsg the client not has login user_id = " + user_id, false);
+                continue;
+            }
+        }
+        
+        log4js.MyDebug(" ===> offset = " + offset + " msg_len = " + msg_len);
+
+        let msg_json_str = buf.slice(offset, offset + msg_len);
+        log4js.MyDebug("doProcessStickyBagMsg user_id =  " + user_id + " msg_len = " + msg_len + " offset " + offset +  " decode_json_str = " + msg_json_str);
+
+        let record_msec = Date.now();
+
+        let decode_str = myUtil.deCode(msg_json_str.toString());
+
+        let cost_msec = Date.now() - record_msec;
+        console.log("----------------> %d ", cost_msec);
+
+        let msg_tb = myUtil.strToJson(decode_str);
+        if (typeof(msg_tb) != 'object') {
+            doMsgException(client, " str can not to json msg_json_str  " + msg_json_str.toString(), false);
+            continue;
+        }
+
+        log4js.MyDebug(" recv msg   user_id = " + msg_tb.user_id + " cmd = " + msg_tb.cmd + " msg = " + msg_tb.msg);
+
+        let cmd = msg_tb.cmd;
+        let recv_msg = msg_tb.msg;
+
+        //console.log('free ' + os.freemem() / kb + 'kb\r\n');
+
+        // 记录每个连接上次接收消息的时间戳　用来做心跳检测
+        let curSec = lib_util.getCurrentTimeStamp();
+        client.last_sec = curSec;
+
+        if (cmd == 101) {
+            doLogic(recv_msg, client.id, i_msg_cmd, user_id);
+        }
+        else {
+
+            if (cmd == 102) {
+            }
+        }
+
+        console.log("---------------------> tmpLen = " + tmp_len);
+    }
+
+    buf = null;
+}
+
 // 3 绑定链接事件
 server.on('connection', (client)=> {
     log4js.MyDebug("remote address = " + client.remoteAddress + " port = " + client.remotePort + " length = " + clientArr.length);
@@ -751,7 +873,7 @@ server.on('connection', (client)=> {
     client.on('data',(buf)=>{
 
         //log4js.MyDebug(" recv msg client id = " + client.id + " msg = " + msg + " length = " + msg.length);
-        log4js.MyDebug(" ===> " + typeof(buf) + " length " + client.bytesRead + " client id = " + client.id);
+        log4js.MyDebug(" ===> " + typeof(buf) + " length " + buf.length + " client id = " + client.id);
 
         /*
         if (lib_util.isBase64Str(msg) == false) {
@@ -778,6 +900,13 @@ server.on('connection', (client)=> {
 
         let msg_len = buf.readUIntBE(offset, 4);
         offset += 4;
+
+        let cur_len = msg_len + 12;
+        if (cur_len < buf.length) {
+            // 如果有粘包的现象存在　则需要　分包　进行处理
+            doProcessStickyBagMsg(client, buf);
+            return;
+        }
 
         log4js.MyWarn("i_msg_cmd %s user_id = %s client id = %s ", i_msg_cmd, user_id, client.id);
 
