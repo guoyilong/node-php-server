@@ -18,10 +18,17 @@ const lib_util = require('./lib/util');
 
 //console.log('free ' + os.freemem() / kb + 'kb\r\n');
 
+// 配置读参数 
+var config_json_name = "config.json";
+if (process.argv.length > 2) {
+    config_json_name = process.argv[2];
+    console.log(" real_config_json_name  = " + config_json_name);
+}
+
 // 读取配置文件
 const myUtil = require('./lib/util');
 const ms = require('ms');
-const config_data = myUtil.loadjson('./config/config.json');
+const config_data = myUtil.loadjson('./config/' + config_json_name);
 log4js.MyDebug(" load config success server ip = %s port = %s worker_num = %s ", config_data.server_ip, config_data.server_port, config_data.worker_num);
 
 
@@ -290,7 +297,22 @@ function replaceOldWorker(oldPid) {
             }
 
             if (need_send_to_client == true && client != null) {
-                client.write("result is " + result_json + " pid " + compute.pid);
+                let msg_len = result_json.length;
+                let send_len = msg_len + 4;
+                let send_buffer = Buffer.allocUnsafe(send_len + 10);
+                send_buffer.fill(0);
+
+                let tmp_offset = 0;
+                send_buffer.writeUIntBE(msg_len, 0, 4);
+                tmp_offset += 4;
+                send_buffer.write(result_json, tmp_offset);
+                tmp_offset += msg_len;
+
+                log4js.MyDebug("send msg to client tmp_offset = %s %s ", tmp_offset, msg_len);
+                
+                client.write(send_buffer.slice(0, tmp_offset));
+                result_json = null;
+                send_buffer = null;
             }
 
             // 找该进程对应的编号　因为消息队列　记录的是　每个子进程对应的编号
@@ -324,7 +346,7 @@ function checkMsgCmdIsLegal(i_msg_cmd) {
 }
 
 const createWorker = () => {	
-    const compute = fork('./php_worker.js');	
+    const compute = fork('./php_worker.js', [config_json_name]);	
 
     compute.has_close = false;
 
@@ -485,8 +507,23 @@ const createWorker = () => {
         }
 
         if (need_send_to_client == true && client != null) {
-            client.write("result is " + result_json + " pid " + compute.pid);
+
+            let msg_len = result_json.length;
+            let send_len = msg_len + 4;
+            let send_buffer = Buffer.allocUnsafe(send_len + 10);
+            send_buffer.fill(0);
+
+            let tmp_offset = 0;
+            send_buffer.writeUIntBE(msg_len, 0, 4);
+            tmp_offset += 4;
+            send_buffer.write(result_json, tmp_offset);
+            tmp_offset += msg_len;
+
+            log4js.MyDebug("send msg to client tmp_offset = %s %s ", tmp_offset, msg_len);
+            
+            client.write(send_buffer.slice(0, tmp_offset));
             result_json = null;
+            send_buffer = null;
         }
 
         // 找该进程对应的编号　因为消息队列　记录的是　每个子进程对应的编号
