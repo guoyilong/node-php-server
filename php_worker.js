@@ -3,10 +3,18 @@ const log4js = require('./lib/log_utils.js'); // 引入库
 const util = require('./lib/util');
 
 var PHPFPM = require('node-phpfpm');
+const ms = require('ms');
 
 var __php_dirname = "/web/www/www/node/";
 
-const config_data = util.loadjson("./config/config.json");
+// 配置读参数 
+var config_json_name = "config.json";
+if (process.argv.length > 2) {
+    config_json_name = process.argv[2];
+    console.log(" php-worker real_config_json_name  = " + config_json_name);
+}
+
+const config_data = util.loadjson("./config/" + config_json_name);
 
 var php_connect_num = config_data.php_connect_num;
 
@@ -41,7 +49,7 @@ function isJSON(str) {
             }
 
         } catch(e) {
-            log4js.MyError('error：'+str+'!!!'+e);
+            log4js.MyError('error: ' + str + ' ' + e);
             return false;
         }
     }
@@ -137,6 +145,95 @@ function do_php_logic(json_msg)
     }
 }
 
+function do_php_logic_post(json_msg)
+{
+    msg_tb = JSON.parse(json_msg);
+
+    msg = msg_tb.msg;
+    msg_index = msg_tb.msg_index
+    let send_php_msg = "test.php" + util.converToUrl(msg_tb);
+
+    log4js.MyDebug("do_php_logic now this process id = " + process.pid  + " in work" + " msg = " + msg + " msg_index = " + msg_index);
+    log4js.MyDebug("do_php_logic send_php_msg = " + send_php_msg);
+
+    // 找到空闲的php连接
+    let select_index = -1;
+    　
+    for (let the_index in php_connect_manager.use_status) {
+        let the_status = php_connect_manager.use_status[the_index];
+
+        if (the_status == 0) {
+            select_index = the_index;
+            break;
+        }
+    }
+
+    log4js.MyDebug("do_php_logic select index = %s", select_index);
+
+    if (select_index >= 0) {
+        let phpfpm = php_connect_manager.php_connect_arr[select_index];
+        log4js.MyDebug("do_php_logic select index = %s now this php_connect in work record id = %s", select_index, phpfpm.record_id);
+        php_connect_manager.use_status[select_index] = 1;
+        phpfpm.run(
+        {
+            uri: 'test_post.php',
+            form: msg_tb
+        }, function(err, output, phpErrors) {
+            if (err == 99) 
+            {
+                console.error('PHPFPM server error');
+            }
+
+            log4js.MyDebug("do_php_logic php ret msg = " + output + " error = " + err + " phpErrors = " + phpErrors);
+            if (phpErrors) 
+            {
+                log4js.MyError("do_php_logic "+　phpErrors);
+
+                php_connect_manager.use_status[select_index] = 0;
+
+                let tmp_msg_tb = {};
+                tmp_msg_tb.error = phpErrors;
+                tmp_msg_tb.msg_index = msg_index;
+                tmp_msg_tb.msg = msg;
+
+                process.send(JSON.stringify(tmp_msg_tb));
+
+                return;
+            }
+            else {
+
+                let ret_fail = false;
+
+                if (output.trim() == "") {
+                    ret_fail = true;
+                }
+                else {
+                   if (isJSON(output) == false) {
+                       ret_fail = true;
+                   }
+
+                }
+
+                if (ret_fail == true) {
+                    php_connect_manager.use_status[select_index] = 0;
+
+                    let tmp_msg_tb = {};
+                    tmp_msg_tb.error = "php script error";
+                    tmp_msg_tb.msg_index = msg_index;
+                    tmp_msg_tb.msg = msg;
+
+                    process.send(JSON.stringify(tmp_msg_tb));
+
+                    return;
+                }
+            }
+
+            php_connect_manager.use_status[select_index] = 0;
+            process.send(output);
+        });
+    }
+}
+
 const test = function(msg) {
 
     if (msg === "gyl" || msg === "guo") {
@@ -152,7 +249,8 @@ process.on('message', msg => {
     log4js.MyDebug("========> recv from master msg " + msg + '   process.pid ' + process.pid); // 子进程id	
     //const sum = test(msg);
     // 如果Node.js进程是通过进程间通信产生的，那么，process.send()方法可以用来给父进程发送消息	
-   	do_php_logic(msg);
+   	//do_php_logic(msg);
+    do_php_logic_post(msg);
 })
 
 /**
@@ -182,7 +280,7 @@ const mem_print = function() {
 // 检查每个连接的心跳是否超时，如果超时　则断开连接
 function checkConnectHeartBeat()
 {
-    //log4js.MyDebug("checkConnectHeartBeat not to check connect heart beat");
+    log4js.MyDebug("phpWorker checkConnectHeartBeat not to check connect heart beat");
 
     //lib_util.computation();
     //lib_util.computation();
